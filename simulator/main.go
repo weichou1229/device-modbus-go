@@ -7,62 +7,108 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync"
 	"syscall"
 
-	"github.com/goburrow/serial"
 	"github.com/tbrandon/mbserver"
 )
 
 const (
-	ProtocolTCP = "TCP"
-	ProtocolRTU = "RTU"
-	ModbusPort  = "1502"
+	defaultDevicePort      = 1502
+	host                   = "0.0.0.0"
+	startingPortEnvName    = "STARTING_PORT"
+	simulatorNumberEnvName = "SIMULATOR_NUMBER"
+	defaultStartingPort    = 2000
+	defaultSimulatorNumber = 1000
 )
 
-var port, protocol *string
+var devices []*mbserver.Server
+var mutex = &sync.Mutex{}
 
-// Run a Modbus TCP or RTU simulator
-// In RTU protocol, you can use socat to simulate serial port:
-// socat -d -d -d -d pty,link=/tmp/master,raw,echo=0 pty,link=/tmp/slave,raw,echo=0
 func main() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
-	protocol = flag.String("protocol", ProtocolTCP, "Modbus protocol")
-	port = flag.String("port", ModbusPort, "Modbus port")
+	_, scalabilityTestMode := os.LookupEnv(startingPortEnvName)
 
-	server := mbserver.NewServer()
-	defer func() {
-		server.Close()
-		fmt.Printf("Simulator shutdown. \n")
-	}()
-
-	if *protocol == ProtocolTCP {
-		url := fmt.Sprintf("0.0.0.0:%s", *port)
-		fmt.Printf("Modbus TCP address: %v \n", url)
-
-		if err := server.ListenTCP(url); err != nil {
-			fmt.Printf("Failed to start the Modbus TCP server, %v\n", err)
+	if scalabilityTestMode {
+		err := createScalabilityTestSimulators()
+		if err != nil {
+			log.Fatalf("Unalbe to create simulators for scalability test, %v. \n", err)
 		}
+
+		defer func() {
+			for _, device := range devices {
+				device.Close()
+			}
+			log.Printf("Close %d mock devices. \n", len(devices))
+		}()
+
 	} else {
-		config := &serial.Config{
-			Address:  "/tmp/master",
-			BaudRate: 19200,
-			DataBits: 8,
-			StopBits: 1,
-			Parity:   "N",
-		}
-		fmt.Printf("Modbus RTU config %v \n", config)
-
-		if err := server.ListenRTU(config); err != nil {
-			fmt.Printf("Failed to start the Modbus RTU server, %v\n", err)
+		err := createMockDevice(defaultDevicePort)
+		if err != nil {
+			log.Fatalf("Fail to create simulator with port %d. \n", defaultDevicePort)
 		}
 	}
 
-	fmt.Printf("Start up a Modbus %s simulator. \n", *protocol)
 	<-c
+	log.Println("Modbus simulator shutdown.")
+}
+
+func createMockDevice(port int) error {
+	device := mbserver.NewServer()
+	url := fmt.Sprintf("%s:%d", host, port)
+	if err := device.ListenTCP(url); err != nil {
+		log.Printf("Failed to start the Modbus TCP server as mock device, %v\n", err)
+		return err
+	}
+	devices = append(devices, device)
+	log.Printf("Start up a Modbus mock device with address %s \n", url)
+	return nil
+}
+
+func scaleDevice(startingPort int, simulatorNumber int) (scaledDevicePorts []int, err error) {
+	log.Printf("Create simulator, startingPort is %d, simulatorNumber is %d \n", startingPort, simulatorNumber)
+	count := 0
+	for count < simulatorNumber {
+		err := createMockDevice(startingPort)
+		if err != nil {
+			return nil, err
+		}
+		scaledDevicePorts = append(scaledDevicePorts, startingPort)
+		startingPort++
+		count++
+	}
+	return scaledDevicePorts, nil
+}
+
+func createScalabilityTestSimulators() error {
+	var err error
+	startingPort := defaultStartingPort
+	simulatorNumber := defaultSimulatorNumber
+	startingPortEnv, ok := os.LookupEnv(startingPortEnvName)
+	if ok {
+		startingPort, err = strconv.Atoi(startingPortEnv)
+		if err != nil {
+			return fmt.Errorf("fail to parse STARTING_PORT %s. \n", startingPortEnv)
+		}
+	}
+	simulatorNumberEnv, ok := os.LookupEnv(simulatorNumberEnvName)
+	if ok {
+		simulatorNumber, err = strconv.Atoi(simulatorNumberEnv)
+		if err != nil {
+			return fmt.Errorf("fail to parse SIMULATOR_NUMBER %s. \n", simulatorNumberEnv)
+		}
+	}
+
+	_, err = scaleDevice(startingPort, simulatorNumber)
+	if err != nil {
+		return fmt.Errorf("fail to scale %d simulators. \n", simulatorNumber)
+	}
+	return nil
 }
