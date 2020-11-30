@@ -2,7 +2,7 @@ module github.com/edgexfoundry/device-modbus-go
 
 require (
 	github.com/edgexfoundry/device-sdk-go v1.3.0
-	github.com/edgexfoundry/go-mod-core-contracts v0.1.111
+	github.com/edgexfoundry/go-mod-core-contracts v0.1.115
 	github.com/goburrow/modbus v0.1.0
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.1 // indirect
@@ -13,3 +13,5 @@ require (
 )
 
 go 1.15
+
+replace github.com/edgexfoundry/device-sdk-go v1.3.0 => github.com/weichou1229/device-sdk-go v1.2.0-dev.7.0.20201130065650-b1d5a5466d97
